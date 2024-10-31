@@ -184,7 +184,7 @@ class UncachedBlockAllocator(BlockAllocatorBase):
 
         # Initialize the free blocks.
         self.free_blocks: List[PhysicalTokenBlock] = []
-        for i in range(num_blocks):
+        for i in range(1, num_blocks):
             block = PhysicalTokenBlock(device=device,
                                        block_number=i,
                                        block_size=block_size,

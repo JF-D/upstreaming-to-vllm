@@ -54,8 +54,6 @@ class NeuronCasualLM(nn.Module):
         positions: torch.Tensor,
         input_metadata,
     ) -> torch.Tensor:
-        print(f"input_metadata={input_metadata}")
-        print(f"input_ids={input_ids.flatten()}, cache_ids={positions.flatten()}, slot_mapping={input_metadata.slot_mapping.flatten()}, prompt_lens={input_metadata.seq_lens_tensor}, block_tables={input_metadata.block_tables.flatten()}")
         logits = self.model(input_ids.reshape(1, -1),
                             cache_ids=positions.reshape(1, -1),
                             start_ids=input_metadata.slot_mapping,
@@ -72,11 +70,6 @@ class NeuronCasualLM(nn.Module):
         logits: torch.Tensor,
         sampling_metadata: SamplingMetadata,
     ) -> Optional[SamplerOutput]:
-        print(logits.shape)
-        print(torch.min(logits, dim=1).values.shape)
-        print("logits", logits - torch.min(logits, dim=1, keepdim=True).values)
-        logits_subtract = logits - torch.min(logits, dim=1, keepdim=True).values
-        print("logits max", torch.max(logits_subtract, dim=1))
         next_tokens = self.sampler(logits, sampling_metadata)
         return next_tokens
 
@@ -152,7 +145,9 @@ def get_neuron_model(model_config: ModelConfig,
         # weight_tiling=True,
         cache_layout=constants.Layout.BSH,
         attention_layout=constants.Layout.BSH,
-        continuous_batching=continuous_batching_config)
+        continuous_batching=continuous_batching_config,
+        shard_over_sequence=parallel_config.shard_over_sequence,
+        duplicate_q_weight_sos=parallel_config.duplicate_q_weight_sos)
 
     # Need to init cache engine before load_weights for correct 
     # operation.

@@ -128,6 +128,8 @@ class EngineArgs:
 
     scheduler_delay_factor: float = 0.0
     enable_chunked_prefill: Optional[bool] = None
+    shard_over_sequence: bool = False
+    duplicate_q_weight_sos: bool = False
 
     guided_decoding_backend: str = 'outlines'
     # Speculative decoding configuration.
@@ -319,7 +321,7 @@ class EngineArgs:
         parser.add_argument('--block-size',
                             type=int,
                             default=EngineArgs.block_size,
-                            choices=[8, 16, 32],
+                            choices=[8, 16, 32, 128, 256, 512, 1024],
                             help='Token block size for contiguous chunks of '
                             'tokens.')
 
@@ -567,6 +569,16 @@ class EngineArgs:
             const="True",
             help='If set, the prefill requests can be chunked based on the '
             'max_num_batched_tokens.')
+        parser.add_argument(
+            '--shard-over-sequence',
+            type=bool,
+            default=EngineArgs.shard_over_sequence,
+            help='Shard sequence along sequence dimension.')
+        parser.add_argument(
+            '--duplicate-q-weight-sos',
+            type=bool,
+            default=EngineArgs.duplicate_q_weight_sos,
+            help='Duplicate q weight for shard over sequence.')
 
         parser.add_argument(
             '--speculative-model',
@@ -814,6 +826,8 @@ class EngineArgs:
         parallel_config = ParallelConfig(
             pipeline_parallel_size=self.pipeline_parallel_size,
             tensor_parallel_size=self.tensor_parallel_size,
+            shard_over_sequence=self.shard_over_sequence,
+            duplicate_q_weight_sos=self.duplicate_q_weight_sos,
             worker_use_ray=self.worker_use_ray,
             max_parallel_loading_workers=self.max_parallel_loading_workers,
             disable_custom_all_reduce=self.disable_custom_all_reduce,
