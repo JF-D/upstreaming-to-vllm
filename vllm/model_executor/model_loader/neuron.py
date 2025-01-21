@@ -139,15 +139,25 @@ def get_neuron_model(model_config: ModelConfig,
         max_num_seqs=scheduler_config.max_num_seqs,
         enable_chunked_prefill=True,
         optimized_paged_attention=True)
+    layout_opt = os.environ.get("NEURON_LAYOUT_OPT", None) is not None
+    mlp_duplicate_degree = int(os.environ.get("NEURON_MLP_DUPLICATE_DEGREE", "1"))
+    flash_paged_attention_sos = os.environ.get("NEURON_FLASH_PA", None) is not None
     neuron_config = NeuronConfig(
         fuse_qkv=True,
+        # fused_rmsnorm_qkv=True,
+        # fused_rmsnorm_mlp=True,
         # quant = QuantizationConfig(quant_dtype='s8', dequant_dtype=amp),
         # weight_tiling=True,
+        on_device_embedding=True,
         cache_layout=constants.Layout.BSH,
-        attention_layout=constants.Layout.BSH,
+        attention_layout=constants.Layout.HSB if layout_opt else constants.Layout.BSH,
+        collectives_layout=constants.Layout.HSB if layout_opt else constants.Layout.BSH,
         continuous_batching=continuous_batching_config,
         shard_over_sequence=parallel_config.shard_over_sequence,
-        duplicate_q_weight_sos=parallel_config.duplicate_q_weight_sos)
+        flash_paged_attention_sos=flash_paged_attention_sos,
+        duplicate_q_weight_sos=parallel_config.duplicate_q_weight_sos,
+        mlp_duplicate_degree=mlp_duplicate_degree,
+        layout_optimization=layout_opt)
 
     # Need to init cache engine before load_weights for correct 
     # operation.
@@ -176,8 +186,16 @@ def get_neuron_model(model_config: ModelConfig,
                                [scheduler_config.max_model_len])
 
     # Uncomment below to test bucketing for chunked prefill
+    #   n_positions: bucketing dimension for the sequence length of cache
+    #   context_length_estimates: bucketing dimension for max_num_batched_token or chunk size
     # n_positions = [n_positions[0]//4, n_positions[0]//2, n_positions[0]]
     # context_length_estimates = [context_length_estimates[0]//4, context_length_estimates[0]//2, context_length_estimates[0]]
+
+    # --> set buckets according to number of blocks
+    block_size = cache_config.block_size
+    max_num_seqs = scheduler_config.max_num_seqs
+    # n_positions = [(2**i) * block_size // max_num_seqs for i in range(12)]
+    # n_positions = [(2048 // block_size * 4) * block_size // max_num_seqs]
 
     # Load the weights from the cached or downloaded files.
     model.load_weights(model_config.model,

@@ -1,8 +1,9 @@
 import os, torch
 os.environ['NEURONX_DUMP_TO'] = os.path.join(os.getcwd(),"_compile_cache")
-os.environ["NEURON_CC_FLAGS"]= " -O1 --internal-hlo2tensorizer-options=--verify-hlo "
+os.environ["NEURON_CC_FLAGS"]= " -O1 --internal-hlo2tensorizer-options=--verify-hlo --internal-enable-dge-levels=vector_dynamic_offsets "
 os.environ["NEURON_RT_DBG_EMBEDDING_UPDATE_BOUND_CHECK"] = "0"
 os.environ["NEURON_RT_DBG_INDIRECT_MEMCPY_BOUND_CHECK"] = "0"
+# os.environ["HLO_SNAPSHOT_PATH"] = os.path.join(os.getcwd(), "_snapshots")
 
 from vllm import LLM, SamplingParams
 import logging
@@ -31,10 +32,10 @@ llm = LLM(
     model="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
     # model="openlm-research/open_llama_3b",
     # model="/shared_3/chndkv/llama-models/Meta-Llama-3.1-8B-Instruct/",
-    tensor_parallel_size=2,
+    tensor_parallel_size=32,
     max_num_seqs=8,
 
-    max_model_len=256,
+    max_model_len=1024,
     max_num_batched_tokens=64,
     enable_chunked_prefill=True,
 
@@ -44,12 +45,14 @@ llm = LLM(
 
     block_size=32,
     # gpu_memory_utilization=0.05,
-    num_gpu_blocks_override=128,
+    num_gpu_blocks_override=300,
 )
 
 # Generate texts from the prompts. The output is a list of RequestOutput objects
 # that contain the prompt, generated text, and other information.
-outputs = llm.generate(prompts, sampling_params)
+from transformers_neuronx import global_debugger
+with global_debugger.debug_context():
+    outputs = llm.generate(prompts, sampling_params)
 # Print the outputs.
 for output in outputs:
     prompt = output.prompt

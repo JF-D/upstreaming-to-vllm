@@ -1,5 +1,5 @@
 import os
-os.environ['NEURONX_DUMP_TO'] = os.path.join(os.getcwd(),"_compile_cache")
+os.environ['NEURONX_DUMP_TO'] = os.path.join(os.getcwd(),"_compile_cache_2")
 os.environ["NEURON_CC_FLAGS"]= " -O3 --internal-hlo2tensorizer-options=--verify-hlo --internal-enable-dge-levels=vector_dynamic_offsets --disable-internal-io-dge --tensorizer-options='--enable-ccop-compute-overlap --cc-pipeline-tiling-factor=2' "
 # os.environ["NEURON_CC_FLAGS"]= " -O1 --internal-hlo2tensorizer-options=--verify-hlo --internal-enable-dge-levels=vector_dynamic_offsets "
 os.environ["NEURON_RT_DBG_EMBEDDING_UPDATE_BOUND_CHECK"] = "0"
@@ -22,10 +22,20 @@ parser.add_argument("--max-num-seqs", type=int, default=8)
 parser.add_argument("--max-model-len", type=int, default=1024)
 parser.add_argument("--chunk-size", type=int, default=128)
 parser.add_argument("--sos", action="store_true")
+parser.add_argument("--duplicate_q", action="store_true")
+parser.add_argument("--no-flash-paged-attention", action="store_true")
+parser.add_argument("--mlp-duplicate-degree", type=int, default=1)
 parser.add_argument("--block-size", type=int, default=128)
 parser.add_argument("--num-blocks", type=int, default=512)
 parser.add_argument("--benchmark", action="store_true")
+parser.add_argument("--layout-opt", action="store_true")
 args = parser.parse_args()
+
+if args.layout_opt:
+    os.environ["NEURON_LAYOUT_OPT"] = "1"
+os.environ["NEURON_MLP_DUPLICATE_DEGREE"] = str(args.mlp_duplicate_degree)
+if not args.no_flash_paged_attention:
+    os.environ["NEURON_FLASH_PA"] = "1"
 
 # Create an LLM.
 llm = LLM(
@@ -37,7 +47,7 @@ llm = LLM(
     max_num_batched_tokens=args.chunk_size,
     enable_chunked_prefill=True,
     shard_over_sequence=args.sos,
-    duplicate_q_weight_sos=args.sos,
+    duplicate_q_weight_sos=args.duplicate_q,
 
     block_size=args.block_size,
     # gpu_memory_utilization=0.05,
@@ -48,14 +58,14 @@ def test():
     # Sample prompts.
     vocab_size = 32000
     total_num_seqs = 8
-    min_context_len = 2
-    max_context_len = 256
+    min_context_len = 1 #2
+    max_context_len = 2 #256
     prompts = torch.randint(0, vocab_size, (total_num_seqs, max_context_len)).numpy().tolist()
     prompt_lens = torch.randint(min_context_len, max_context_len, (total_num_seqs,)).numpy().tolist()
 
     prompt_tokens = [prompts[i][:prompt_lens[i]] for i in range(total_num_seqs)]
     # Create a sampling params object.
-    sampling_params = SamplingParams(max_tokens=10, top_k=1)
+    sampling_params = SamplingParams(max_tokens=10, top_k=1, temperature=0)
 
     # Generate texts from the prompts. The output is a list of RequestOutput objects
     # that contain the prompt, generated text, and other information.
