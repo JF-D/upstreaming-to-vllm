@@ -605,15 +605,20 @@ class NeuronModelRunner(ModelRunnerBase[ModelInputForNeuron]):
         if num_steps > 1:
             raise ValueError(
                 "NeuronModelRunner does not support multi-step execution.")
+        import time
+        print(f"input tokens: {model_input.input_tokens}, {torch.max(model_input.input_tokens)}")
+        tic = time.perf_counter()
         hidden_states = self.model(
             input_ids=model_input.input_tokens,
             positions=model_input.input_positions,
             input_metadata=model_input.attn_metadata,
         )
+        toc1 = time.perf_counter()
 
         # Compute the logits.
         logits = self.model.compute_logits(hidden_states,
                                            model_input.sampling_metadata)
+        toc2 = time.perf_counter()
         # Sample the next token.
         # Before sampling we only keep tokens that are to be sampled (to check if logic is actually correct or not)
         seqs_to_sample = []
@@ -625,6 +630,8 @@ class NeuronModelRunner(ModelRunnerBase[ModelInputForNeuron]):
             logits=logits,
             sampling_metadata=model_input.sampling_metadata,
         )
+        toc3 = time.perf_counter()
+        print(f"-- IN VLLM: forward {(toc1 - tic) * 1000:.2f} ms, logits: {(toc2 - toc1) * 1000:.2f} ms, sample: {(toc3 - toc2) * 1000:.2f} ms")
         return [output]
 
     @property
