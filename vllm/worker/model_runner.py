@@ -737,13 +737,13 @@ class ModelInputForGPUBuilder(ModelRunnerInputBuilderBase[ModelInputForGPU]):
         family of functions.
 
         Args:
-            num_seqs (int): Number of sequences scheduled to run. 
+            num_seqs (int): Number of sequences scheduled to run.
             max_decode_seq_len (int): Greatest of all the decode sequence
                 lengths. Used only in checking the viablility of using
                 CUDA graphs.
             max_encoder_seq_len (int, optional): Greatest of all the encode
                 sequence lengths. Defaults to 0. Used only in checking the
-                viability of using CUDA graphs. 
+                viability of using CUDA graphs.
         Returns:
             int: Returns the determined number of padding sequences. If
                 CUDA graphs is not viable, returns -1.
@@ -1551,6 +1551,20 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
     _model_input_cls: Type[ModelInputForGPUWithSamplingMetadata] = (
         ModelInputForGPUWithSamplingMetadata)
     _builder_cls: Type[ModelInputForGPUBuilder] = ModelInputForGPUBuilder
+    step = 0
+    import os
+    import torch.autograd.profiler as profiler
+    profiling = False
+    prof = torch.profiler.profile(activities=[
+                    torch.profiler.ProfilerActivity.CPU,
+                    torch.profiler.ProfilerActivity.CUDA
+                ], with_stack=True, with_modules=True) if profiling else None
+    # prof = profiler.profile(with_stack=True, use_device='cuda', with_modules=True)
+    total_exec_time = 0
+    total_overhead = 0
+    total_steps = 0
+
+    EVAL_SERVING = os.environ.get("EVAL_SERVING", None) is not None
 
     def make_model_input_from_broadcasted_tensor_dict(
         self,
@@ -1609,6 +1623,10 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         intermediate_tensors: Optional[IntermediateTensors] = None,
         num_steps: int = 1,
     ) -> Optional[Union[List[SamplerOutput], IntermediateTensors]]:
+        import time
+        if not self.EVAL_SERVING:
+            torch.cuda.synchronize()
+            tic = time.perf_counter()
         if num_steps > 1:
             raise ValueError("num_steps > 1 is not supported in ModelRunner")
 
@@ -1631,6 +1649,11 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         assert model_input.attn_metadata is not None
         prefill_meta = model_input.attn_metadata.prefill_metadata
         decode_meta = model_input.attn_metadata.decode_metadata
+        if self.is_driver_worker and not self.EVAL_SERVING:
+            if prefill_meta is not None:
+                print(f"PREFILL Meta: {prefill_meta.num_prefill_tokens}, {prefill_meta.query_start_loc}, {prefill_meta.seq_start_loc}, {prefill_meta.context_lens_tensor}")
+            if decode_meta is not None:
+                print(f"DECODE Meta: {decode_meta.num_decode_tokens}, {decode_meta.query_start_loc}, {decode_meta.seq_start_loc}, {decode_meta.context_lens_tensor}")
         # TODO(andoorve): We can remove this once all
         # virtual engines share the same kv cache.
         virtual_engine = model_input.virtual_engine
@@ -1693,6 +1716,9 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
         if not self.is_driver_worker:
             return []
 
+        if not self.EVAL_SERVING:
+            torch.cuda.synchronize()
+            toc = time.perf_counter()
         if model_input.async_callback is not None:
             model_input.async_callback()
 
@@ -1732,6 +1758,30 @@ class ModelRunner(GPUModelRunnerBase[ModelInputForGPUWithSamplingMetadata]):
                 hidden_states = hidden_or_intermediate_states
 
             output.hidden_states = hidden_states
+        if not self.EVAL_SERVING:
+            torch.cuda.synchronize()
+            toc2 = time.perf_counter()
+            self.total_exec_time += toc - tic
+            self.total_overhead += toc2 - toc
+            self.total_steps += 1
+            avg_speed = self.total_exec_time / self.total_steps * 1000
+            avg_overhead = self.total_overhead / self.total_steps * 1000
+            print(model_input.input_tokens.size())
+            print(f"SPEED: {(toc - tic) * 1000:.2f} ms, sample overhead: {(toc2 - toc) * 1000:.2f} ms, "
+                  f"AVG SPEED: {avg_speed:.2f} ms, AVG overhead: {avg_overhead:.2f} ms")
+        if self.total_steps > 50:
+            self.total_exec_time = 0
+            self.total_overhead = 0
+            self.total_steps = 0
+
+        if self.prof:
+            self.step += 1
+            if self.step == 118:
+                self.prof.start()
+            if self.step == 128:
+                self.prof.stop()
+                if self.is_driver_worker:
+                    self.prof.export_chrome_trace("log/vllm_8B_bs1_chunk2048_seq32768_append_prefill_p4d.json")
 
         return [output]
 

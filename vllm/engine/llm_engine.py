@@ -45,7 +45,7 @@ from vllm.prompt_adapter.request import PromptAdapterRequest
 from vllm.sampling_params import RequestOutputKind, SamplingParams
 from vllm.sequence import (EmbeddingSequenceGroupOutput, ExecuteModelRequest,
                            Sequence, SequenceGroup, SequenceGroupMetadata,
-                           SequenceGroupOutput, SequenceStatus)
+                           SequenceGroupOutput, SequenceStatus, Logprob)
 from vllm.tracing import (SpanAttributes, SpanKind, extract_trace_context,
                           init_tracer)
 from vllm.transformers_utils.config import try_get_generation_config
@@ -649,8 +649,17 @@ class LLMEngine:
         seq_id = next(self.seq_counter)
         eos_token_id = self.input_preprocessor.get_eos_token_id(lora_request)
 
+        import os
+        decode_ctx_length = os.environ.get("DECODE_CONTEXT_LENGTH", None)
+        if decode_ctx_length is not None:
+            decode_ctx_length = int(decode_ctx_length)
+            processed_inputs['prompt_token_ids'] = [0] * (decode_ctx_length - 1) + processed_inputs['prompt_token_ids']
         seq = Sequence(seq_id, processed_inputs, block_size, eos_token_id,
                        lora_request, prompt_adapter_request)
+        append_ctx_length = os.environ.get("APPEND_CONTEXT_LENGTH", None)
+        if append_ctx_length is not None:
+            append_ctx_length = int(append_ctx_length)
+            seq.data._num_computed_tokens = append_ctx_length
 
         encoder_seq = None
         if 'encoder_prompt_token_ids' in processed_inputs:
@@ -687,6 +696,10 @@ class LLMEngine:
         else:
             raise ValueError(
                 "Either SamplingParams or PoolingParams must be provided.")
+
+        if decode_ctx_length is not None:
+            seq_group.update_num_computed_tokens(decode_ctx_length)
+            seq_group.seqs[0].append_token_id(0, {0: Logprob(1.0)})
 
         # Add the sequence group to the scheduler with least unfinished seqs.
         costs = [
@@ -977,9 +990,9 @@ class LLMEngine:
         This function updates num_computed_tokens for prompt sequences
         when Multi-Step is enabled.
 
-        seq_group: SequenceGroup to update the num_computed_tokens for. 
+        seq_group: SequenceGroup to update the num_computed_tokens for.
         seq_group_meta: Metadata of the given SequenceGroup.
-        is_first_step_output: Optional[bool] - 
+        is_first_step_output: Optional[bool] -
             When available, is_first_step_output indicates if the appended
             output token is the output of the first-step in multi-step.
             A value of None indicates that outputs from all steps in
@@ -1069,6 +1082,7 @@ class LLMEngine:
                 return
         else:
             indices = range(len(seq_group_metadata_list))  # type: ignore
+        # return
 
         finished_before: List[int] = []
         finished_now: List[int] = []

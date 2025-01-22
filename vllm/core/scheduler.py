@@ -984,7 +984,7 @@ class Scheduler:
 
     def _schedule_default(self) -> SchedulerOutputs:
         """Schedule queued requests.
-        
+
         The current policy is designed to optimize the throughput. First,
         it batches as many prefill requests as possible. And it schedules
         decodes. If there's a pressure on GPU memory, decode requests can
@@ -1088,7 +1088,7 @@ class Scheduler:
 
     def _schedule_chunked_prefill(self) -> SchedulerOutputs:
         """Schedule queued requests.
-        
+
         Chunked prefill allows to chunk prefill requests, batch them together
         with decode requests. This policy 1. schedule as many decoding requests
         as possible. 2. schedule chunked prefill requests that are not
@@ -1105,6 +1105,16 @@ class Scheduler:
             max_num_seqs=self.scheduler_config.max_num_seqs,
         )
         curr_loras: Set[int] = set()
+
+        import os
+        decode_ctx_length = os.environ.get("DECODE_CONTEXT_LENGTH", None)
+        if decode_ctx_length is not None:
+            decode_ctx_length = int(decode_ctx_length)
+            bs = self.scheduler_config.max_num_seqs
+            while len(self.running) < bs:
+                seq_group = self.waiting.pop()
+                self.block_manager.allocate(seq_group)
+                self._add_seq_group_to_running(seq_group)
 
         prefills = SchedulerPrefillOutputs.create_empty()
         swapped_in = SchedulerSwappedInOutputs.create_empty()
@@ -1215,6 +1225,15 @@ class Scheduler:
         # This function call changes the internal states of the scheduler
         # such as self.running, self.swapped, and self.waiting.
         scheduler_start_time = time.perf_counter()
+
+        # import os
+        # decode_ctx_length = os.environ.get("DECODE_CONTEXT_LENGTH", None)
+        # if decode_ctx_length is not None:
+        #     decode_ctx_length = int(decode_ctx_length)
+        #     bs = self.scheduler_config.max_num_seqs
+        #     for seq_group in self.running[:bs]:
+        #         if seq_group.seqs[0].seq_id not in self.block_manager.block_tables:
+        #             self.block_manager.allocate(seq_group)
 
         scheduler_outputs: SchedulerOutputs = self._schedule()
         now = time.time()
@@ -1599,6 +1618,7 @@ class Scheduler:
 
         Returns 0 if the new token cannot be computed due to token budget.
         """
+        # return 32
         num_new_tokens = 0
         seqs = seq_group.get_seqs(status=status)
         for seq in seqs:
